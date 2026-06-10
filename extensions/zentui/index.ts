@@ -18,7 +18,12 @@ import {
 } from "./config";
 import { installFooter } from "./footer";
 import { emptyGitStatus, readGitStatus } from "./git";
-import { type StopProjectRefreshInterval, startProjectRefreshInterval } from "./project-refresh";
+import {
+	type ScheduleProjectRefreshOptions,
+	type StopProjectRefreshInterval,
+	createProjectRefreshScheduler,
+	startProjectRefreshInterval,
+} from "./project-refresh";
 import { readRuntimeInfo } from "./runtime";
 import { installSelectorBorderStyle } from "./selector-border";
 import { registerZentuiSettingsCommand } from "./settings-command";
@@ -58,8 +63,6 @@ export default function (pi: ExtensionAPI) {
 	let editorInstallMode: EditorInstallMode = "none";
 	let wrappedEditorFactory: EditorFactory | undefined;
 	let prototypePatchesInstalled = false;
-	let projectRefreshInFlight = false;
-	let projectRefreshPending = false;
 
 	const refresh = () => requestFooterRender?.();
 	const getActiveTheme = () => activeTheme;
@@ -77,22 +80,9 @@ export default function (pi: ExtensionAPI) {
 		state.runtime = runtime;
 	};
 
-	const scheduleProjectRefresh = (ctx: ExtensionContext) => {
-		if (projectRefreshInFlight) {
-			projectRefreshPending = true;
-			return;
-		}
-
-		projectRefreshInFlight = true;
-		void refreshProjectState(ctx).finally(() => {
-			projectRefreshInFlight = false;
-			refresh();
-			if (projectRefreshPending) {
-				projectRefreshPending = false;
-				scheduleProjectRefresh(ctx);
-			}
-		});
-	};
+	const projectRefreshScheduler = createProjectRefreshScheduler(refreshProjectState, refresh);
+	const scheduleProjectRefresh = (ctx: ExtensionContext, options?: ScheduleProjectRefreshOptions) =>
+		projectRefreshScheduler.schedule(ctx, options);
 
 	const refreshInteractiveState = (ctx: ExtensionContext, project = false) => {
 		if (!ctx.hasUI) return;
@@ -104,8 +94,7 @@ export default function (pi: ExtensionAPI) {
 	const stopProjectRefresh = () => {
 		stopRefreshInterval();
 		stopRefreshInterval = () => {};
-		projectRefreshInFlight = false;
-		projectRefreshPending = false;
+		projectRefreshScheduler.stop();
 	};
 
 	const installPrototypePatches = () => {
@@ -213,7 +202,7 @@ export default function (pi: ExtensionAPI) {
 		stopRefreshInterval = startProjectRefreshInterval(currentConfig.projectRefreshIntervalMs, () =>
 			scheduleProjectRefresh(ctx),
 		);
-		scheduleProjectRefresh(ctx);
+		scheduleProjectRefresh(ctx, { force: true });
 		refresh();
 	};
 

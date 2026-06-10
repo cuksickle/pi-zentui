@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startProjectRefreshInterval } from "../extensions/zentui/project-refresh";
+import {
+	createProjectRefreshScheduler,
+	startProjectRefreshInterval,
+} from "../extensions/zentui/project-refresh";
+
+async function flushPromises(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
 
 describe("startProjectRefreshInterval", () => {
 	afterEach(() => {
@@ -35,5 +43,108 @@ describe("startProjectRefreshInterval", () => {
 		vi.advanceTimersByTime(120_000);
 		expect(refresh).not.toHaveBeenCalled();
 		expect(() => stop()).not.toThrow();
+	});
+});
+
+describe("createProjectRefreshScheduler", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("throttles bursty project refresh requests", async () => {
+		vi.useFakeTimers();
+		const refresh = vi.fn<(...args: [string]) => Promise<void>>(() => Promise.resolve());
+		const afterRefresh = vi.fn();
+		const scheduler = createProjectRefreshScheduler(refresh, afterRefresh, 5_000);
+
+		scheduler.schedule("initial");
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(1);
+		expect(refresh).toHaveBeenLastCalledWith("initial");
+		expect(afterRefresh).toHaveBeenCalledTimes(1);
+
+		scheduler.schedule("first-pending");
+		scheduler.schedule("latest-pending");
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(4_999);
+		await flushPromises();
+		expect(refresh).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(1);
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(2);
+		expect(refresh).toHaveBeenLastCalledWith("latest-pending");
+		expect(afterRefresh).toHaveBeenCalledTimes(2);
+	});
+
+	it("coalesces refreshes requested while a refresh is in flight", async () => {
+		vi.useFakeTimers();
+		let finishRefresh: (() => void) | undefined;
+		const refresh = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					finishRefresh = resolve;
+				}),
+		);
+		const afterRefresh = vi.fn();
+		const scheduler = createProjectRefreshScheduler(refresh, afterRefresh, 5_000);
+
+		scheduler.schedule("initial");
+		scheduler.schedule("pending");
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(1);
+		expect(afterRefresh).not.toHaveBeenCalled();
+
+		finishRefresh?.();
+		await flushPromises();
+
+		expect(afterRefresh).toHaveBeenCalledTimes(1);
+		expect(refresh).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(5_000);
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(2);
+		expect(refresh).toHaveBeenLastCalledWith("pending");
+	});
+
+	it("supports forced refreshes for initial status reads", async () => {
+		vi.useFakeTimers();
+		const refresh = vi.fn<(...args: [string]) => Promise<void>>(() => Promise.resolve());
+		const afterRefresh = vi.fn();
+		const scheduler = createProjectRefreshScheduler(refresh, afterRefresh, 5_000);
+
+		scheduler.schedule("initial");
+		await flushPromises();
+		scheduler.schedule("forced", { force: true });
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(2);
+		expect(refresh).toHaveBeenLastCalledWith("forced");
+	});
+
+	it("recovers from failed refreshes", async () => {
+		vi.useFakeTimers();
+		const refresh = vi
+			.fn<(...args: [string]) => Promise<void>>()
+			.mockRejectedValueOnce(new Error("slow git command failed"))
+			.mockResolvedValue(undefined);
+		const afterRefresh = vi.fn();
+		const scheduler = createProjectRefreshScheduler(refresh, afterRefresh, 5_000);
+
+		scheduler.schedule("initial");
+		await flushPromises();
+		scheduler.schedule("next", { force: true });
+		await flushPromises();
+
+		expect(refresh).toHaveBeenCalledTimes(2);
+		expect(refresh).toHaveBeenLastCalledWith("next");
+		expect(afterRefresh).toHaveBeenCalledTimes(2);
 	});
 });
