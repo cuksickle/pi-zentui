@@ -319,3 +319,25 @@ export function renderChromeBorder(
 		text,
 	);
 }
+
+/**
+ * Build an ANSI background "open" sequence (no trailing reset) for a ColorSpec.
+ * Tokens are coerced to background semantics: bare colors / hex / 256-codes and
+ * explicit `bg:` tokens become backgrounds; `fg:` is rewritten to `bg:`.
+ * Non-color tokens (e.g. "bold") are ignored. Returns "" for empty/invalid specs.
+ */
+export function backgroundOpenSequence(style: ColorSpec): string {
+	const trimmed = style.trim();
+	if (!trimmed) return "";
+	const bgTokens = trimmed
+		.split(/\s+/)
+		.map((token) => {
+			const normalized = token.toLowerCase();
+			if (normalized.startsWith("fg:")) return `bg:${normalized.slice(3)}`;
+			if (normalized.startsWith("bg:")) return normalized;
+			return `bg:${normalized}`;
+		});
+	const rendered = renderTerminalStyle(bgTokens.join(" "), "");
+	if (rendered === "") return "";
+	return rendered.replace(/\x1b\[0m$/, "");
+}

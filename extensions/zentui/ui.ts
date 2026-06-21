@@ -12,6 +12,7 @@ import type { PolishedTuiConfig } from "./config";
 import {
 	EDITOR_ACCENT_FALLBACK,
 	EDITOR_BORDER_FALLBACK,
+	backgroundOpenSequence,
 	renderStyleForSourceOrFallback,
 	safeThemeFg,
 } from "./style";
@@ -350,7 +351,13 @@ function renderPolishedFrame({
 				...autocompleteLines,
 			];
 
-	return clampRenderedLines(renderedLines, width);
+	const editorBackgroundSpec = config.colors.editorBackground;
+	const bgPrefix = editorBackgroundSpec ? backgroundOpenSequence(editorBackgroundSpec) : "";
+	const finalLines = bgPrefix
+		? renderedLines.map((line) => `${bgPrefix}${fillLine(line, width)}\x1b[0m`)
+		: renderedLines;
+
+	return clampRenderedLines(finalLines, width);
 }
 
 export class PolishedEditor extends CustomEditor {
